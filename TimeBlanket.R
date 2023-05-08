@@ -53,7 +53,7 @@ alldates <- data.frame(date = seq(ymd("2020-02-01"), ymd("2023-01-31"), by="days
 #5. Group by month, client, & dayclass----
 #split ABMI/BAM time in two
 dat.month <- dat %>% 
-  left_join(alldates) %>% 
+  full_join(alldates) %>% 
   group_by(year, client, month, dayclass) %>% 
   summarize(days = sum(days)) %>% 
   ungroup() %>% 
@@ -98,27 +98,26 @@ totaltime <- alldates %>%
   summarize(totaldays=n()) %>% 
   ungroup()
 
-dat.off <- dat.month %>% 
+dat.off <- dat.month.use %>% 
   group_by(year, month, dayclass) %>% 
   summarize(ondays = sum(daysround)) %>% 
   ungroup() %>% 
-  left_join(totaltime) %>% 
-  mutate(offdays = totaldays - ondays) %>% 
+  full_join(totaltime) %>% 
+  mutate(ondays = ifelse(is.na(ondays), 0, ondays),
+         offdays = totaldays - ondays) %>% 
   dplyr::select(-totaldays, -ondays) %>% 
   pivot_wider(names_from=dayclass, values_from=offdays, values_fill=0) %>% 
-  mutate(weekday = ifelse(weekend < 0, weekday + weekend, weekday),
+  mutate(weekday = ifelse(weekend < 0, weekday - weekend, weekday),
          weekend = ifelse(weekend < 0, 0, weekend),
          weekend = ifelse(weekday < 0, weekend + weekday, weekend),
-         weekday = ifelse(weekday < 0, 0, weekday),
-         weekend = ifelse(weekend < 0, 0, weekend)) %>% 
+         weekday = ifelse(weekday < 0, 0, weekday)) %>% 
   pivot_longer(weekday:weekend, values_to="offdays", names_to="dayclass")
 
 #9. Put it all together----
 dat.all <- dat.off %>% 
   rename(days = offdays) %>% 
   mutate(client = "Off") %>% 
-  rbind(dat.month %>% 
-          dplyr::filter(use==1) %>% 
+  rbind(dat.month.use %>% 
           dplyr::select(year, month, dayclass, daysround, client) %>% 
           rename(days = daysround)) %>% 
   arrange(year, month, dayclass, client) %>% 
@@ -133,8 +132,6 @@ dat.all <- dat.off %>%
 dat.all %>% 
   group_by(panel) %>% 
   summarize(days = sum(days)) %>% 
-  ungroup()
-#something has gone sideways...
 
 #11. Add colours----
 clrs <- data.frame(unique(dat.all$client),
@@ -147,17 +144,27 @@ ggplot(dat.all) +
   facet_wrap(~panel) +
   theme_bw()
 
-#13. Calculate rows per client----
+#13. Calculate rows per client & estimate skeins----
 clientrows <- dat.all %>% 
-  mutate(rows = ifelse(dayclass=="weekend", days*2, days)) %>% 
+  mutate(rows = ifelse(dayclass=="weekend", days*2, days),
+         total = sum(rows)) %>% 
   group_by(client) %>% 
-  summarize(rows = sum(rows)) %>% 
-  ungroup()
+  summarize(rows = sum(rows),
+            percent = rows/total,
+            skeins= percent*11) %>% 
+  ungroup() %>% 
+  unique()
 clientrows
 
-#14. Calculate rows per panel----
-panelrows <- dat.all %>% 
-  group_by(panel, dayclass) %>% 
-  summarize(rows = sum(days)) %>% 
-  ungroup()
-panelrows
+#14. Format for knitting----
+dat.all$client <- factor(dat.all$client, levels=c("PhD", "Side Project", "Job Searching", 
+                                                  "Consulting", "SMBC", "ABMI", "BAM", "Off"))
+dat.all$dayclass <- factor(dat.all$dayclass, levels=c("weekday", "weekend"))
+
+dat.out <- dat.all %>% 
+  mutate(fabric = ifelse(dayclass=="weekend", "garter ridge", "stockinette row")) %>% 
+  arrange(panel, month, client, dayclass) %>% 
+  dplyr::select(panel, year,  month, dayclass, client, days, fabric) %>% 
+  mutate(Done = "")
+
+write.csv(dat.out, "data/TimeBlanketPattern.csv", row.names = FALSE)
